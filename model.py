@@ -15,16 +15,28 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
-
-    def __init__(self, ndim, bias):
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization.
+    
+    参考自LLaMA论文实现,相比LayerNorm:
+    1. 移除了均值归一化
+    2. 移除了bias项
+    3. 只保留方差归一化
+    """
+    def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(ndim))
-        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
 
-    def forward(self, input):
-        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+    def _norm(self, x):
+        # 计算RMS值
+        rms = torch.sqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
+        return x / rms
+    
+    def forward(self, x):
+        # x: (batch, seq_len, dim)
+        output = self._norm(x)
+        return output * self.weight
 
 class CausalSelfAttention(nn.Module):
 
@@ -95,14 +107,14 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.rms_1 = RMSNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.rms_2 = RMSNorm(config.n_embd)
         self.mlp = MLP(config)
 
     def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
+        x = x + self.attn(self.rms_1(x))
+        x = x + self.mlp(self.rms_2(x))
         return x
 
 @dataclass
@@ -128,7 +140,7 @@ class GPT(nn.Module):
             wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            ln_f = RMSNorm(config.n_embd),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
@@ -328,3 +340,22 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+
+    def load_state_dict(self, state_dict):
+        """重写load_state_dict方法来处理参数名称的转换"""
+        new_state_dict = state_dict.copy()
+        
+        # 转换norm层的参数名
+        for key in list(new_state_dict.keys()):
+            if 'ln_1.weight' in key:
+                new_key = key.replace('ln_1', 'rms_1')
+                new_state_dict[new_key] = new_state_dict.pop(key)
+            elif 'ln_2.weight' in key:
+                new_key = key.replace('ln_2', 'rms_2')
+                new_state_dict[new_key] = new_state_dict.pop(key)
+            elif 'ln_f.weight' in key:
+                new_key = key.replace('ln_f', 'rms_f')
+                new_state_dict[new_key] = new_state_dict.pop(key)
+                
+        # 调用父类的load_state_dict
+        return super().load_state_dict(new_state_dict, strict=False)
