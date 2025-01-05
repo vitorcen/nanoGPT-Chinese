@@ -7,18 +7,10 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from pathlib import Path
 import shutil
 
-# [
-# {
-#     "title": "中华人民共和国消防法",
-#     "content": "第六十六条 电器产品、燃气用具的安装、使用及其线路、管路的设计、敷设、维护保养、检测不符合消防技术标准和管理规定的，责令限期改正；逾期不改正的，责令停止使用，可以并处一千元以上五千元以下罚款。\n"
-# },
-# {
-#     "title": "中华人民共和国非物质文化遗产法",
-#     "content": "第三十五条 图书馆、文化馆、博物馆、科技馆等公共文化机构和非物质文化遗产学术研究机构、保护机构以及利用财政性资金举办的文艺表演团体、演出场所经营单位等，应当根据各自业务范围，开展非物质文化遗产的整理、研究、学术交流和非物质文化遗产代表性项目的宣传、展示。\n"
-# },
-# ]
+# {"uuid": "05587266-e629-5d6e-9f98-3e1e904ebf80", "prompt": "使用下列意象写一首现代诗：屋子，雪地", "response": "标题:相思\n\n躲开想思，\n披上裘儿\n走出灯明人静的屋子。\n小径里明月相窥，\n枯枝——\n在雪地上\n又纵横的写遍了想思。"}
+# {"uuid": "e8ed0256-8394-5daf-a37b-e7c3aef5a0b0", "prompt": "使用下列意象写一首现代诗：微光，繁星", "response": "标题:繁星：一\n\n繁星闪烁着——\n深蓝的太空\n何曾听得见它们对话？\n沉默中\n微光里\n它们深深的互相颂赞了。"}
 
-def get_dataset_path(dataset_name="Dusker/chinese-laws-pretrain"):
+def get_dataset_path(dataset_name="Iess/chinese_modern_poetry"):
     """获取数据集路径，如果本地不存在则下载"""
     try:
         # 尝试使用 snapshot_download 下载整个数据集
@@ -49,23 +41,24 @@ for filename in os.listdir(dataset_dir):
     if filename.endswith('.json'):
         file_path = os.path.join(dataset_dir, filename)
         print(f"Reading file: {filename}")
+        
+        entries_count = 0
         with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            entries_count = len(data)
-            
-            # 计算分割点
-            split_idx = int(len(data) * 0.9)
-            
-            # 分割数据
-            train_entries = data[:split_idx]
-            val_entries = data[split_idx:]
-            
-            # 将title和content组合在一起
-            train_data.extend([f"{entry['title']}{entry['content']}" for entry in train_entries])
-            val_data.extend([f"{entry['title']}{entry['content']}" for entry in val_entries])
-            
-            print(f"  - Processed {entries_count} entries from {filename}")
-            print(f"    Train: {len(train_entries)}, Val: {len(val_entries)}")
+            for line in f:
+                if line.strip():  # 跳过空行
+                    entry = json.loads(line)
+                    entries_count += 1
+                    
+                    # 在每条数据末尾添加 END 标记
+                    formatted_text = f"{entry['prompt']}\n{entry['response']}\nEND\n"
+                    
+                    # 随机分配到训练集或验证集
+                    if np.random.random() < 0.9:  # 90% 概率进入训练集
+                        train_data.append(formatted_text)
+                    else:
+                        val_data.append(formatted_text)
+        
+        print(f"  - Processed {entries_count} entries from {filename}")
 
 print(f"\nTotal files processed: {len([f for f in os.listdir(dataset_dir) if f.endswith('.json')])}")
 print(f"Total entries: Train = {len(train_data)}, Val = {len(val_data)}\n")
@@ -75,7 +68,7 @@ train_text = ' '.join(train_data)
 val_text = ' '.join(val_data)
 
 # 初始化分词器
-tokenizer = AutoTokenizer.from_pretrained("hfl/chinese-macbert-base")
+tokenizer = AutoTokenizer.from_pretrained("hfl/chinese-roberta-wwm-ext")
 
 # 使用分词器进行分词
 train_tokens = tokenizer.tokenize(train_text)
@@ -115,5 +108,5 @@ print(f"Saved meta.pkl, train.bin, and val.bin to {output_dir}")
 print(f"train.bin has {len(train_ids):,} tokens")
 print(f"val.bin has {len(val_ids):,} tokens")
 
-# train.bin has 1,394,452 tokens
-# val.bin has 170,524 tokens
+# train.bin has 32,345,174 tokens
+# val.bin has 3,593,706 tokens
